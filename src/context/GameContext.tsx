@@ -40,74 +40,83 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       let userUsername = '';
       let referrerId: number | undefined;
 
-      if (typeof window !== 'undefined' && window.Telegram?.WebApp) {
-        const tg = window.Telegram.WebApp;
-        tg.ready();
-        tg.expand();
+      if (typeof window !== 'undefined') {
+        const tg = window.Telegram?.WebApp;
 
-        const tgUser = tg.initDataUnsafe?.user;
-        if (tgUser?.id) {
-          userId = tgUser.id;
-          userFirstName = tgUser.first_name || '';
-          userUsername = tgUser.username || '';
-        }
+        if (tg) {
+          tg.ready();
+          tg.expand();
 
-        // Extract referral parameter
-        let startParam = tg.initDataUnsafe?.start_param || '';
+          // Safely extract user from initDataUnsafe
+          const tgUser = tg.initDataUnsafe?.user;
 
-        if (!startParam) {
-          const urlParams = new URLSearchParams(window.location.search);
-          startParam = urlParams.get('tgWebAppStartParam') || urlParams.get('startapp') || urlParams.get('start_param') || '';
-        }
+          if (tgUser?.id) {
+            userId = Number(tgUser.id);
+            userFirstName = tgUser.first_name || '';
+            userUsername = tgUser.username || '';
+          }
 
-        if (startParam.startsWith('ref_')) {
-          const parsedId = parseInt(startParam.replace('ref_', ''), 10);
-          if (!isNaN(parsedId)) {
-            referrerId = parsedId;
+          // Extract start_param for referrals
+          let startParam = tg.initDataUnsafe?.start_param || '';
+
+          if (!startParam) {
+            const urlParams = new URLSearchParams(window.location.search);
+            startParam =
+              urlParams.get('tgWebAppStartParam') ||
+              urlParams.get('startapp') ||
+              urlParams.get('start_param') ||
+              '';
+          }
+
+          if (startParam.startsWith('ref_')) {
+            const parsedId = parseInt(startParam.replace('ref_', ''), 10);
+            if (!isNaN(parsedId)) {
+              referrerId = parsedId;
+            }
           }
         }
-      }
 
-      // If no valid Telegram user is present, abort syncing to prevent fake accounts
-      if (!userId) {
-        setLoading(false);
-        return;
-      }
-
-      setTelegramId(userId);
-      setFirstName(userFirstName);
-      setUsername(userUsername);
-
-      try {
-        // Fetch or create user record in Supabase using actual Telegram data only
-        const player = await PlayerService.getOrCreatePlayer(
-          {
-            id: userId,
-            first_name: userFirstName,
-            username: userUsername,
-          },
-          referrerId
-        );
-
-        const dbBalance = Number(player.balance);
-        const dbStatus = Number(player.status_points || 0);
-
-        setBalance(dbBalance);
-        setStatus(dbStatus);
-        setLang((player.language as 'en' | 'am') || 'en');
-
-        // Fetch owned items from database
-        const ownedItemIds = await PlayerService.getPlayerInventory(userId);
-        setInventory(ownedItemIds);
-
-        // Process referral bonus if referred
-        if (referrerId && userId !== referrerId) {
-          await PlayerService.processReferralBonus(userId, referrerId);
+        // If not in Telegram environment or user unavailable, stop execution safely
+        if (!userId) {
+          console.warn('[GameContext] No active Telegram user detected in WebApp context.');
+          setLoading(false);
+          return;
         }
-      } catch (err) {
-        console.error('Failed to sync player state from Supabase:', err);
-      } finally {
-        setLoading(false);
+
+        console.log(`[GameContext] Authenticated Telegram User: ID=${userId}, Name=${userFirstName}`);
+
+        setTelegramId(userId);
+        setFirstName(userFirstName);
+        setUsername(userUsername);
+
+        try {
+          // Fetch or Create user profile directly in Supabase
+          const player = await PlayerService.getOrCreatePlayer(
+            {
+              id: userId,
+              first_name: userFirstName,
+              username: userUsername,
+            },
+            referrerId
+          );
+
+          setBalance(Number(player.balance || 0));
+          setStatus(Number(player.status_points || 0));
+          setLang((player.language as 'en' | 'am') || 'en');
+
+          // Fetch user's inventory
+          const ownedItemIds = await PlayerService.getPlayerInventory(userId);
+          setInventory(ownedItemIds);
+
+          // Award referral bonus if referred by another user
+          if (referrerId && userId !== referrerId) {
+            await PlayerService.processReferralBonus(userId, referrerId);
+          }
+        } catch (err) {
+          console.error('[GameContext] Error syncing with Supabase:', err);
+        } finally {
+          setLoading(false);
+        }
       }
     };
 

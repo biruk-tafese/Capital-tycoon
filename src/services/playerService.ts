@@ -23,34 +23,33 @@ export interface ReferralResult {
 
 export const PlayerService = {
   /**
-   * Safely fetches or creates a user opening the Telegram Mini App.
-   * Updates profile details dynamically if the user changed their name/username in Telegram.
+   * Fetches or creates the active Telegram user row in Supabase.
+   * Directly updates profile names if changed in Telegram.
    */
   async getOrCreatePlayer(tgUser: TelegramUserData, referrerId?: number): Promise<PlayerRow> {
     const rawTgId = String(tgUser.id);
 
-    // 1. Check if the player already exists in the database
-    const { data: existingPlayer, error: fetchError } = await (supabase
+    // 1. Query for existing player
+    const { data: existingPlayer } = await (supabase
       .from('players') as any)
       .select('*')
       .eq('telegram_id', rawTgId)
       .maybeSingle();
 
-    if (fetchError) {
-      console.error('Error fetching existing player:', fetchError);
-    }
-
     if (existingPlayer) {
-      // Sync first_name or username if they changed in Telegram
-      const needsNameUpdate = tgUser.first_name && existingPlayer.first_name !== tgUser.first_name;
-      const needsUserUpdate = tgUser.username && existingPlayer.username !== tgUser.username;
+      // Dynamically update profile names if modified in Telegram
+      const updatedFirstName = tgUser.first_name || existingPlayer.first_name;
+      const updatedUsername = tgUser.username || existingPlayer.username;
 
-      if (needsNameUpdate || needsUserUpdate) {
+      if (
+        updatedFirstName !== existingPlayer.first_name ||
+        updatedUsername !== existingPlayer.username
+      ) {
         const { data: updatedPlayer } = await (supabase
           .from('players') as any)
           .update({
-            first_name: tgUser.first_name || existingPlayer.first_name,
-            username: tgUser.username || existingPlayer.username,
+            first_name: updatedFirstName,
+            username: updatedUsername,
             updated_at: new Date().toISOString(),
           })
           .eq('telegram_id', rawTgId)
@@ -63,25 +62,22 @@ export const PlayerService = {
       return existingPlayer as PlayerRow;
     }
 
-    // 2. Insert new player row strictly with actual Telegram parameters
-    const { data: newPlayer, error: upsertError } = await (supabase
+    // 2. Insert new user with $30,000 starting balance
+    const { data: newPlayer, error: insertError } = await (supabase
       .from('players') as any)
-      .upsert(
-        {
-          telegram_id: rawTgId,
-          first_name: tgUser.first_name || null,
-          username: tgUser.username || null,
-          balance: 30000,
-          status_points: 0,
-          referred_by: referrerId ? String(referrerId) : null,
-        },
-        { onConflict: 'telegram_id', ignoreDuplicates: false }
-      )
+      .insert({
+        telegram_id: rawTgId,
+        first_name: tgUser.first_name || null,
+        username: tgUser.username || null,
+        balance: 30000,
+        status_points: 0,
+        referred_by: referrerId ? String(referrerId) : null,
+      })
       .select('*')
       .single();
 
-    if (upsertError) {
-      console.error('Upsert failed, querying fallback player:', upsertError);
+    if (insertError) {
+      console.warn('Insert conflict or error, fetching fallback row:', insertError);
       const { data: fallbackPlayer } = await (supabase
         .from('players') as any)
         .select('*')
@@ -89,7 +85,7 @@ export const PlayerService = {
         .single();
 
       if (fallbackPlayer) return fallbackPlayer as PlayerRow;
-      throw upsertError;
+      throw insertError;
     }
 
     return newPlayer as PlayerRow;
