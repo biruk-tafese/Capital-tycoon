@@ -1,0 +1,20 @@
+@import "tailwindcss";
+
+@theme {
+  --color-blueblack-950: #0B0F19;
+  --color-blueblack-900: #111827;
+  --color-blueblack-800: #1F2937;
+
+  --color-gold-400: #FFE066;
+  --color-gold-500: #FFD700;
+  --color-gold-600: #B8860B;
+
+  --color-alertred-500: #EF4444;
+}
+
+body {
+  background-color: var(--color-blueblack-950);
+  color: #ffffff;
+  user-select: none;
+  min-height: 100vh;
+}
