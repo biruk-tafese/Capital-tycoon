@@ -23,67 +23,89 @@ export interface ReferralResult {
 
 export const PlayerService = {
   /**
-   * Safely fetches or creates a user opening the Telegram Mini App using UPSERT.
-   * Sends telegram_id as a string to protect against 64-bit integer precision loss.
+   * Safely fetches or creates a user opening the Telegram Mini App.
+   * Updates profile details dynamically if the user changed their name/username in Telegram.
    */
   async getOrCreatePlayer(tgUser: TelegramUserData, referrerId?: number): Promise<PlayerRow> {
     const rawTgId = String(tgUser.id);
 
-    // 1. Try fetching existing player first
-    const { data: existingPlayer } = await supabase
-      .from('players')
+    // 1. Check if the player already exists in the database
+    const { data: existingPlayer, error: fetchError } = await (supabase
+      .from('players') as any)
       .select('*')
       .eq('telegram_id', rawTgId)
       .maybeSingle();
 
-    if (existingPlayer) {
-      return existingPlayer as unknown as PlayerRow;
+    if (fetchError) {
+      console.error('Error fetching existing player:', fetchError);
     }
 
-    // 2. Insert with 30,000 starting balance if new user
-    const { data: newPlayer, error: upsertError } = await supabase
-      .from('players')
+    if (existingPlayer) {
+      // Sync first_name or username if they changed in Telegram
+      const needsNameUpdate = tgUser.first_name && existingPlayer.first_name !== tgUser.first_name;
+      const needsUserUpdate = tgUser.username && existingPlayer.username !== tgUser.username;
+
+      if (needsNameUpdate || needsUserUpdate) {
+        const { data: updatedPlayer } = await (supabase
+          .from('players') as any)
+          .update({
+            first_name: tgUser.first_name || existingPlayer.first_name,
+            username: tgUser.username || existingPlayer.username,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('telegram_id', rawTgId)
+          .select('*')
+          .single();
+
+        if (updatedPlayer) return updatedPlayer as PlayerRow;
+      }
+
+      return existingPlayer as PlayerRow;
+    }
+
+    // 2. Insert new player row strictly with actual Telegram parameters
+    const { data: newPlayer, error: upsertError } = await (supabase
+      .from('players') as any)
       .upsert(
         {
           telegram_id: rawTgId,
-          first_name: tgUser.first_name || 'Tycoon Player',
+          first_name: tgUser.first_name || null,
           username: tgUser.username || null,
           balance: 30000,
           status_points: 0,
           referred_by: referrerId ? String(referrerId) : null,
-        } as any,
-        { onConflict: 'telegram_id', ignoreDuplicates: true }
+        },
+        { onConflict: 'telegram_id', ignoreDuplicates: false }
       )
       .select('*')
       .single();
 
     if (upsertError) {
-      const { data: fallbackPlayer } = await supabase
-        .from('players')
+      console.error('Upsert failed, querying fallback player:', upsertError);
+      const { data: fallbackPlayer } = await (supabase
+        .from('players') as any)
         .select('*')
         .eq('telegram_id', rawTgId)
         .single();
 
-      if (fallbackPlayer) return fallbackPlayer as unknown as PlayerRow;
-
-      console.error('Error in getOrCreatePlayer:', upsertError);
+      if (fallbackPlayer) return fallbackPlayer as PlayerRow;
       throw upsertError;
     }
 
-    return newPlayer as unknown as PlayerRow;
+    return newPlayer as PlayerRow;
   },
 
   /**
    * Fetches item IDs owned by the player from player_inventory
    */
   async getPlayerInventory(telegramId: number): Promise<string[]> {
-    const { data, error } = await supabase
-      .from('player_inventory')
+    const { data, error } = await (supabase
+      .from('player_inventory') as any)
       .select('item_id')
       .eq('telegram_id', String(telegramId));
 
     if (error || !data) {
-      console.error('Error fetching inventory:', error);
+      console.error('Error fetching player inventory:', error);
       return [];
     }
 
@@ -91,11 +113,10 @@ export const PlayerService = {
   },
 
   /**
-   * Executes atomic item purchase via Postgres RPC function
+   * Executes atomic item purchase via Postgres buy_shop_item RPC function
    */
   async purchaseItem(telegramId: number, item: ShopItem): Promise<PurchaseResult> {
     try {
-      // Cast supabase.rpc as any to bypass client typing restrictions for custom RPCs
       const { data, error } = await (supabase.rpc as any)('buy_shop_item', {
         p_telegram_id: String(telegramId),
         p_item_id: String(item.id),
@@ -109,9 +130,9 @@ export const PlayerService = {
       }
 
       const res = data as any;
-      if (!res.success) {
-        console.warn('RPC purchase rejected by DB:', res.error);
-        return { success: false, error: res.error };
+      if (!res?.success) {
+        console.warn('RPC purchase rejected by database:', res?.error);
+        return { success: false, error: res?.error || 'PURCHASE_REJECTED' };
       }
 
       return {
@@ -126,7 +147,7 @@ export const PlayerService = {
   },
 
   /**
-   * Processes referral reward when a user opens the app via a referral link
+   * Processes referral reward ($3,000 DD) when opened via a referral link
    */
   async processReferralBonus(
     newTelegramId: number,
@@ -136,7 +157,7 @@ export const PlayerService = {
       const { data, error } = await (supabase.rpc as any)('process_referral', {
         p_new_telegram_id: String(newTelegramId),
         p_referrer_id: String(referrerId),
-        p_reward_amount: 3000, // Updated to $3,000 DD
+        p_reward_amount: 3000,
       });
 
       if (error) {

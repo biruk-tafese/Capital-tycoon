@@ -6,6 +6,8 @@ import { ShopItem } from '../types/store';
 
 interface GameContextType {
   telegramId: number | null;
+  firstName: string;
+  username: string;
   balance: number;
   status: number;
   inventory: string[];
@@ -21,6 +23,8 @@ const GameContext = createContext<GameContextType | undefined>(undefined);
 export function GameProvider({ children }: { children: React.ReactNode }) {
   const [mounted, setMounted] = useState(false);
   const [telegramId, setTelegramId] = useState<number | null>(null);
+  const [firstName, setFirstName] = useState<string>('');
+  const [username, setUsername] = useState<string>('');
   const [balance, setBalance] = useState<number>(0);
   const [status, setStatus] = useState<number>(0);
   const [inventory, setInventory] = useState<string[]>([]);
@@ -31,9 +35,9 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setMounted(true);
 
     const initApp = async () => {
-      let userId: number = 99999999; // Default fallback ID for local/Ngrok desktop testing
-      let firstName = 'Dev Executive';
-      let username = 'dev_tycoon';
+      let userId: number | null = null;
+      let userFirstName = '';
+      let userUsername = '';
       let referrerId: number | undefined;
 
       if (typeof window !== 'undefined' && window.Telegram?.WebApp) {
@@ -42,46 +46,64 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         tg.expand();
 
         const tgUser = tg.initDataUnsafe?.user;
-        const startParam = tg.initDataUnsafe?.start_param || '';
-
         if (tgUser?.id) {
           userId = tgUser.id;
-          firstName = tgUser.first_name || firstName;
-          username = tgUser.username || username;
+          userFirstName = tgUser.first_name || '';
+          userUsername = tgUser.username || '';
+        }
+
+        // Extract referral parameter
+        let startParam = tg.initDataUnsafe?.start_param || '';
+
+        if (!startParam) {
+          const urlParams = new URLSearchParams(window.location.search);
+          startParam = urlParams.get('tgWebAppStartParam') || urlParams.get('startapp') || urlParams.get('start_param') || '';
         }
 
         if (startParam.startsWith('ref_')) {
           const parsedId = parseInt(startParam.replace('ref_', ''), 10);
-          if (!isNaN(parsedId)) referrerId = parsedId;
+          if (!isNaN(parsedId)) {
+            referrerId = parsedId;
+          }
         }
       }
 
+      // If no valid Telegram user is present, abort syncing to prevent fake accounts
+      if (!userId) {
+        setLoading(false);
+        return;
+      }
+
       setTelegramId(userId);
+      setFirstName(userFirstName);
+      setUsername(userUsername);
 
       try {
-        // Fetch or create user record in Supabase using the resolved userId
+        // Fetch or create user record in Supabase using actual Telegram data only
         const player = await PlayerService.getOrCreatePlayer(
           {
             id: userId,
-            first_name: firstName,
-            username: username,
+            first_name: userFirstName,
+            username: userUsername,
           },
           referrerId
         );
 
-        const currentBalance = Number(player.balance);
-        const currentStatus = Number(player.status_points || 0);
+        const dbBalance = Number(player.balance);
+        const dbStatus = Number(player.status_points || 0);
 
-        console.log('[SUPABASE DB READ] User:', userId, 'Balance:', currentBalance);
-
-        setBalance(currentBalance);
-        setStatus(currentStatus);
+        setBalance(dbBalance);
+        setStatus(dbStatus);
         setLang((player.language as 'en' | 'am') || 'en');
 
-        // Fetch user's inventory
+        // Fetch owned items from database
         const ownedItemIds = await PlayerService.getPlayerInventory(userId);
         setInventory(ownedItemIds);
 
+        // Process referral bonus if referred
+        if (referrerId && userId !== referrerId) {
+          await PlayerService.processReferralBonus(userId, referrerId);
+        }
       } catch (err) {
         console.error('Failed to sync player state from Supabase:', err);
       } finally {
@@ -97,7 +119,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       try {
         window.Telegram.WebApp.HapticFeedback.impactOccurred(style);
       } catch (e) {
-        // Desktop testing fallback
+        // Ignored
       }
     }
   }, []);
@@ -134,6 +156,8 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     <GameContext.Provider
       value={{
         telegramId,
+        firstName,
+        username,
         balance,
         status,
         inventory,
