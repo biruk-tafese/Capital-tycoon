@@ -133,11 +133,10 @@ export const PlayerService = {
     referrerId: number
   ): Promise<ReferralResult> {
     try {
-      // Cast supabase.rpc as any to bypass client typing restrictions for custom RPCs
       const { data, error } = await (supabase.rpc as any)('process_referral', {
         p_new_telegram_id: String(newTelegramId),
         p_referrer_id: String(referrerId),
-        p_reward_amount: 1000,
+        p_reward_amount: 3000, // Updated to $3,000 DD
       });
 
       if (error) {
