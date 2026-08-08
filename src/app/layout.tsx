@@ -1,11 +1,11 @@
 import type { Metadata } from 'next';
-import Script from 'next/script';
-import { Providers } from '../components/Providers';
+import '../lib/suppressThreeWarnings'; //
+import { GameProvider } from '../context/GameContext';
 import './globals.css';
 
 export const metadata: Metadata = {
   title: 'Capital Tycoon',
-  description: 'Gamified 3D Telegram Mini App',
+  description: 'Telegram Mini App Game',
 };
 
 export default function RootLayout({
@@ -14,15 +14,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <head>
-        <Script
-          src="https://telegram.org/js/telegram-web-app.js"
-          strategy="beforeInteractive"
-        />
-      </head>
-      <body className="antialiased" suppressHydrationWarning>
-        <Providers>{children}</Providers>
+    <html lang="en">
+      <body
+        className="bg-blueblack-950 text-white antialiased"
+        suppressHydrationWarning
+      >
+        <GameProvider>{children}</GameProvider>
       </body>
     </html>
   );

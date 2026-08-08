@@ -1,32 +1,36 @@
-export interface TelegramUser {
+interface TelegramUser {
   id: number;
+  is_bot?: boolean;
   first_name: string;
   last_name?: string;
   username?: string;
   language_code?: string;
-  is_premium?: boolean;
+  photo_url?: string;
 }
 
-export interface TelegramWebApp {
-  initData: string;
-  initDataUnsafe: {
-    user?: TelegramUser;
-    start_param?: string;
-  };
+interface TelegramWebApp {
   ready: () => void;
   expand: () => void;
   close: () => void;
+  initData: string;
+  initDataUnsafe: {
+    query_id?: string;
+    user?: TelegramUser;
+    auth_date?: string;
+    hash?: string;
+    start_param?: string;
+  };
   HapticFeedback: {
     impactOccurred: (style: 'light' | 'medium' | 'heavy' | 'rigid' | 'soft') => void;
     notificationOccurred: (type: 'error' | 'success' | 'warning') => void;
     selectionChanged: () => void;
   };
+  openTelegramLink: (url: string) => void;
+  openLink: (url: string, options?: { try_instant_view?: boolean }) => void;
 }
 
-declare global {
-  interface Window {
-    Telegram?: {
-      WebApp: TelegramWebApp;
-    };
-  }
+interface Window {
+  Telegram?: {
+    WebApp: TelegramWebApp;
+  };
 }

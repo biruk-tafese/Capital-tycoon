@@ -1,8 +1,8 @@
 'use client';
-
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import gsap from 'gsap';
+import '../../lib/suppressThreeWarnings';
 
 export default function PedestalCanvas() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -51,7 +51,7 @@ export default function PedestalCanvas() {
     scene.add(new THREE.AmbientLight(0xffffff, 0.8));
 
     // GSAP Floating Animation Loop
-    gsap.to(crystal.position, {
+    const floatAnimation = gsap.to(crystal.position, {
       y: 1.4,
       duration: 1.8,
       repeat: -1,
@@ -67,11 +67,17 @@ export default function PedestalCanvas() {
     };
     renderLoop();
 
+    // Clean up resources on unmount
     return () => {
       cancelAnimationFrame(animationFrameId);
+      floatAnimation.kill();
+      pedestalGeo.dispose();
+      pedestalMat.dispose();
+      itemGeo.dispose();
+      itemMat.dispose();
       renderer.dispose();
     };
   }, []);
 
-  return <canvas ref={canvasRef} className="rounded-3xl shadow-2xl" />;
+  return <canvas ref={canvasRef} className="rounded-3xl shadow-2xl mx-auto" />;
 }
