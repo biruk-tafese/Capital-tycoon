@@ -81,7 +81,7 @@ bot.action(/^check_join(?::(.+))?$/, async (ctx) => {
       {
         parse_mode: 'Markdown',
         ...Markup.inlineKeyboard([
-          [Markup.button.webApp('🎮 Launch Capital Tycoon', appUrl)],
+          [Markup.button.webApp('🎮 Play Capital Tycoon', appUrl)],
         ]),
       }
     );
