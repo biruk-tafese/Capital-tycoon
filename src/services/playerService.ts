@@ -30,6 +30,16 @@ export interface LeaderboardEntry {
   status_points: number;
 }
 
+export interface NotificationItem {
+  id: string;
+  telegram_id: string;
+  title: string;
+  message: string;
+  type: 'referral' | 'account' | 'task' | 'system';
+  is_read: boolean;
+  created_at: string;
+}
+
 export const PlayerService = {
   /**
    * Safely fetches or registers the active Telegram account in Supabase.
@@ -113,9 +123,12 @@ export const PlayerService = {
 
     // 3. Trigger +3,000 referral bonus for the referrer
     if (validReferrerId && newPlayer) {
-      this.processReferralBonus(rawTgId, validReferrerId).catch((err) =>
-        console.error('[PlayerService] Background referral error:', err)
-      );
+      try {
+        await this.processReferralBonus(rawTgId, validReferrerId);
+        console.log(`[PlayerService] Referral bonus credited to ${validReferrerId}`);
+      } catch (err) {
+        console.error('[PlayerService] Referral bonus error:', err);
+      }
     }
 
     return newPlayer as PlayerRow;
@@ -161,7 +174,7 @@ export const PlayerService = {
         return { success: false, error: error.message || 'RPC_FAILED' };
       }
 
-      const res = data as any;
+      const res = Array.isArray(data) ? data[0] : data;
       if (!res?.success) {
         return { success: false, error: res?.error || 'PURCHASE_REJECTED' };
       }
@@ -200,7 +213,8 @@ export const PlayerService = {
         return { success: false, error: error.message || 'REFERRAL_FAILED' };
       }
 
-      return (data as ReferralResult) || { success: false, error: 'UNKNOWN_ERROR' };
+      const result = Array.isArray(data) ? data[0] : data;
+      return (result as ReferralResult) || { success: false, error: 'UNKNOWN_ERROR' };
     } catch (err: any) {
       console.error('[PlayerService] Unhandled referral error:', err);
       return { success: false, error: err?.message || 'SERVER_ERROR' };
@@ -239,12 +253,17 @@ export const PlayerService = {
         p_telegram_id: String(telegramId),
       });
 
-      if (error || (data as any)?.error) {
-        console.error('[Leaderboard] Error fetching player rank:', error || (data as any)?.error);
+      if (error) {
+        console.error('[Leaderboard] Error fetching player rank:', error);
         return null;
       }
 
-      return data as LeaderboardEntry;
+      // RPC functions returning tables return arrays in JS -> Pick first element
+      if (Array.isArray(data) && data.length > 0) {
+        return data[0] as LeaderboardEntry;
+      }
+
+      return (data as LeaderboardEntry) || null;
     } catch (err) {
       console.error('[Leaderboard] Unhandled exception:', err);
       return null;
@@ -298,6 +317,110 @@ export const PlayerService = {
     } catch (err) {
       console.error('[PlayerService] Unhandled referral count exception:', err);
       return 0;
+    }
+  },
+
+
+
+
+  /**
+   * Fetches all notifications for a specific player sorted by latest
+   */
+  async getNotifications(telegramId: string): Promise<NotificationItem[]> {
+    if (!telegramId) return [];
+    try {
+      const { data, error } = await (supabase
+        .from('notifications') as any)
+        .select('*')
+        .eq('telegram_id', String(telegramId))
+        .order('created_at', { ascending: false })
+        .limit(30);
+
+      if (error) {
+        console.error('[PlayerService] Error fetching notifications:', error);
+        return [];
+      }
+      return (data || []) as NotificationItem[];
+    } catch (err) {
+      console.error('[PlayerService] Unhandled notifications error:', err);
+      return [];
+    }
+  },
+
+  /**
+   * Marks specific or all notifications as read
+   */
+  async markNotificationsRead(telegramId: string, notificationId?: string): Promise<boolean> {
+    if (!telegramId) return false;
+    try {
+      let query = (supabase.from('notifications') as any)
+        .update({ is_read: true })
+        .eq('telegram_id', String(telegramId));
+
+      if (notificationId) {
+        query = query.eq('id', notificationId);
+      } else {
+        query = query.eq('is_read', false);
+      }
+
+      const { error } = await query;
+      if (error) {
+        console.error('[PlayerService] Error marking notifications read:', error);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      console.error('[PlayerService] Unhandled mark read error:', err);
+      return false;
+    }
+  },
+
+  /**
+   * Removes a notification from the list
+   */
+  async deleteNotification(notificationId: string): Promise<boolean> {
+    if (!notificationId) return false;
+    try {
+      const { error } = await (supabase
+        .from('notifications') as any)
+        .delete()
+        .eq('id', notificationId);
+
+      if (error) {
+        console.error('[PlayerService] Error deleting notification:', error);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      console.error('[PlayerService] Unhandled notification delete error:', err);
+      return false;
+    }
+  },
+
+  /**
+   * Creates a manual system/task notification
+   */
+  async createNotification(
+    telegramId: string,
+    title: string,
+    message: string,
+    type: 'referral' | 'account' | 'task' | 'system' = 'system'
+  ): Promise<boolean> {
+    if (!telegramId) return false;
+    try {
+      const { error } = await (supabase.from('notifications') as any).insert([
+        {
+          telegram_id: String(telegramId),
+          title,
+          message,
+          type,
+          is_read: false,
+        },
+      ]);
+      return !error;
+    } catch (err) {
+      console.error('[PlayerService] Error creating notification:', err);
+      return false;
     }
   },
 };

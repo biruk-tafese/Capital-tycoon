@@ -1,7 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
-import { PlayerService } from '../services/playerService';
+import { PlayerService, NotificationItem } from '../services/playerService';
 import { ShopItem } from '../types/store';
 import { supabase } from '../lib/supabase/client';
 
@@ -12,9 +12,14 @@ interface GameContextType {
   balance: number;
   status: number;
   inventory: string[];
+  notifications: NotificationItem[];
+  unreadCount: number;
   lang: 'en' | 'am';
   setLang: (lang: 'en' | 'am') => void;
   loading: boolean;
+  markNotificationsAsRead: (id?: string) => Promise<void>;
+  dismissNotification: (id: string) => Promise<void>;
+  addBalanceReward: (amount: number, reasonTitle?: string, reasonMessage?: string) => Promise<void>;
   triggerHaptic: (style?: 'light' | 'medium' | 'heavy') => void;
   executePurchase: (item: ShopItem) => Promise<{ success: boolean; error?: string }>;
 }
@@ -29,7 +34,7 @@ function parseUserFromInitData(initData: string) {
       return JSON.parse(decodeURIComponent(userStr));
     }
   } catch (e) {
-    console.error('Failed to parse initData user payload:', e);
+    console.error('[GameContext] Failed to parse initData user payload:', e);
   }
   return null;
 }
@@ -42,13 +47,27 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   const [balance, setBalance] = useState<number>(0);
   const [status, setStatus] = useState<number>(0);
   const [inventory, setInventory] = useState<string[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [lang, setLang] = useState<'en' | 'am'>('en');
   const [loading, setLoading] = useState<boolean>(true);
 
   const initializedRef = useRef(false);
 
   // -------------------------------------------------------------
-  // 1. Initial Telegram Hydration & Player State Fetch
+  // 1. Native Telegram Haptic Feedback Trigger
+  // -------------------------------------------------------------
+  const triggerHaptic = useCallback((style: 'light' | 'medium' | 'heavy' = 'medium') => {
+    if (typeof window !== 'undefined' && window.Telegram?.WebApp?.HapticFeedback) {
+      try {
+        window.Telegram.WebApp.HapticFeedback.impactOccurred(style);
+      } catch (e) {
+        // Fallback for non-Telegram desktop testing context
+      }
+    }
+  }, []);
+
+  // -------------------------------------------------------------
+  // 2. Initial Telegram Hydration & Player State Fetch
   // -------------------------------------------------------------
   useEffect(() => {
     setMounted(true);
@@ -127,12 +146,17 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
           referrerId
         );
 
-        setBalance(Number(player?.balance || 0));
-        setStatus(Number(player?.status_points || 0));
+        setBalance(Math.floor(Number(player?.balance || 0)));
+        setStatus(Math.floor(Number(player?.status_points || 0)));
         setLang((player?.language as 'en' | 'am') || 'en');
 
-        const ownedItems = await PlayerService.getPlayerInventory(rawUserId);
+        const [ownedItems, initialNotifications] = await Promise.all([
+          PlayerService.getPlayerInventory(rawUserId),
+          PlayerService.getNotifications(rawUserId),
+        ]);
+
         setInventory(ownedItems || []);
+        setNotifications(initialNotifications || []);
       } catch (err: any) {
         console.error('[GameContext] Error syncing player state:', err?.message || err);
       } finally {
@@ -144,14 +168,15 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // -------------------------------------------------------------
-  // 2. Realtime WebSocket Subscription (Live Balance & Status Sync)
+  // 3. Realtime WebSocket Subscriptions (Player Balance & Notifications)
   // -------------------------------------------------------------
   useEffect(() => {
     if (!telegramId) return;
 
-    console.log(`[GameContext Realtime] Subscribing to live updates for Telegram ID: ${telegramId}`);
+    console.log(`[GameContext Realtime] Subscribing to live channels for Telegram ID: ${telegramId}`);
 
-    const channel = supabase
+    // Channel A: Live Balance & Status Updates
+    const playerChannel = supabase
       .channel(`realtime:player:${telegramId}`)
       .on(
         'postgres_changes',
@@ -163,47 +188,114 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         },
         (payload) => {
           const updatedPlayer = payload.new as any;
-          console.log('[GameContext Realtime] Remote database update received:', updatedPlayer);
 
           if (updatedPlayer?.balance !== undefined) {
-            setBalance(Number(updatedPlayer.balance));
+            setBalance(Math.floor(Number(updatedPlayer.balance)));
           }
           if (updatedPlayer?.status_points !== undefined) {
-            setStatus(Number(updatedPlayer.status_points));
+            setStatus(Math.floor(Number(updatedPlayer.status_points)));
           }
           if (updatedPlayer?.language) {
             setLang(updatedPlayer.language as 'en' | 'am');
           }
 
-          // Trigger subtle haptic on remote reward/update arrival
-          triggerHaptic('medium');
+          triggerHaptic('heavy');
         }
       )
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          console.log('[GameContext Realtime] WebSocket Connection ACTIVE ⚡');
+      .subscribe();
+
+    // Channel B: Real-time Incoming Notifications
+    const notifyChannel = supabase
+      .channel(`realtime:notifications:${telegramId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notifications',
+          filter: `telegram_id=eq.${telegramId}`,
+        },
+        (payload) => {
+          const newNotification = payload.new as NotificationItem;
+          setNotifications((prev) => [newNotification, ...prev]);
+          triggerHaptic('heavy');
         }
-      });
+      )
+      .subscribe();
 
     return () => {
-      console.log('[GameContext Realtime] Cleaning up WebSocket subscription');
-      supabase.removeChannel(channel);
+      console.log('[GameContext Realtime] Cleaning up WebSocket channels');
+      supabase.removeChannel(playerChannel);
+      supabase.removeChannel(notifyChannel);
     };
-  }, [telegramId]);
+  }, [telegramId, triggerHaptic]);
 
   // -------------------------------------------------------------
-  // 3. Helpers & Purchases
+  // 4. Notification Action Handlers
   // -------------------------------------------------------------
-  const triggerHaptic = useCallback((style: 'light' | 'medium' | 'heavy' = 'medium') => {
-    if (typeof window !== 'undefined' && window.Telegram?.WebApp?.HapticFeedback) {
+  const markNotificationsAsRead = async (id?: string) => {
+    if (!telegramId) return;
+
+    setNotifications((prev) =>
+      prev.map((item) =>
+        id ? (item.id === id ? { ...item, is_read: true } : item) : { ...item, is_read: true }
+      )
+    );
+
+    await PlayerService.markNotificationsRead(telegramId, id);
+  };
+
+  const dismissNotification = async (id: string) => {
+    if (!id) return;
+
+    setNotifications((prev) => prev.filter((item) => item.id !== id));
+    await PlayerService.deleteNotification(id);
+  };
+
+  const unreadCount = notifications.filter((item) => !item.is_read).length;
+
+  // -------------------------------------------------------------
+  // 5. Future Boost / Video Reward Incrementor
+  // -------------------------------------------------------------
+  const addBalanceReward = useCallback(
+    async (amount: number, reasonTitle?: string, reasonMessage?: string) => {
+      if (!telegramId || amount <= 0) return;
+
+      const integerAmount = Math.floor(amount);
+
+      // Optimistic local state update
+      setBalance((prev) => Math.floor(prev) + integerAmount);
+      triggerHaptic('heavy');
+
       try {
-        window.Telegram.WebApp.HapticFeedback.impactOccurred(style);
-      } catch (e) {
-        // Fallback for desktop testing
-      }
-    }
-  }, []);
+        // Cast supabase to any to safely execute custom SQL stored procedure
+        const { error } = await (supabase as any).rpc('increment_player_balance', {
+          p_telegram_id: telegramId,
+          p_amount: integerAmount,
+        });
 
+        if (error) {
+          console.error('[GameContext] Error incrementing balance via RPC:', error);
+        }
+
+        if (reasonTitle && reasonMessage) {
+          await PlayerService.createNotification(
+            telegramId,
+            reasonTitle,
+            reasonMessage,
+            'task'
+          );
+        }
+      } catch (err) {
+        console.error('[GameContext] Unhandled reward increment error:', err);
+      }
+    },
+    [telegramId, triggerHaptic]
+  );
+
+  // -------------------------------------------------------------
+  // 6. Shop Purchases Execution
+  // -------------------------------------------------------------
   const executePurchase = async (item: ShopItem) => {
     if (!telegramId) return { success: false, error: 'NO_TELEGRAM_ID' };
 
@@ -211,15 +303,29 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       const result = await PlayerService.purchaseItem(telegramId, item);
 
       if (result.success) {
-        // Optimistic UI updates (WebSocket will verify shortly after)
-        setBalance((prev) => Math.max(0, prev - Number(item.price)));
-        setStatus((prev) => prev + Number(item.statusBoost || 0));
+        setBalance((prev) => Math.max(0, Math.floor(prev - Number(item.price))));
+        setStatus((prev) => Math.floor(prev + Number(item.statusBoost || 0)));
         setInventory((prev) => [...prev, item.id]);
+
+        // Safely extract item name regardless of property naming convention
+        const itemName =
+          (item as any).title ||
+          (item as any).nameEn ||
+          (item as any).name ||
+          item.id;
+
+        await PlayerService.createNotification(
+          telegramId,
+          'Asset Purchased!',
+          `You acquired ${itemName} for $${item.price.toLocaleString()} DD.`,
+          'account'
+        );
+
         triggerHaptic('heavy');
       }
       return result;
     } catch (err: any) {
-      console.error('Purchase failed:', err?.message || err);
+      console.error('[GameContext] Purchase failed:', err?.message || err);
       return { success: false, error: 'SERVER_ERROR' };
     }
   };
@@ -237,9 +343,14 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         balance,
         status,
         inventory,
+        notifications,
+        unreadCount,
         lang,
         setLang,
         loading,
+        markNotificationsAsRead,
+        dismissNotification,
+        addBalanceReward,
         triggerHaptic,
         executePurchase,
       }}

@@ -5,6 +5,7 @@ import { useTelegramGame } from '../../context/GameContext';
 import { translations } from '../../lib/i18n';
 import { PlayerService } from '../../services/playerService';
 import { TonConnectButton, useTonAddress } from '@tonconnect/ui-react';
+import { supabase } from '../../lib/supabase/client';
 import {
   Wallet,
   Users,
@@ -35,7 +36,7 @@ export default function ProfileView() {
   const [referralCount, setReferralCount] = useState<number>(0);
   const userFriendlyAddress = useTonAddress();
 
-  // Load referral stats dynamically from Supabase
+  // 1. Fetch initial referral stats & subscribe to Realtime WebSocket updates
   useEffect(() => {
     let isMounted = true;
 
@@ -45,18 +46,45 @@ export default function ProfileView() {
           const count = await PlayerService.getReferralCount(telegramId);
           if (isMounted) setReferralCount(count);
         } catch (err) {
-          console.error('Error fetching referral count:', err);
+          console.error('[ProfileView] Error fetching referral count:', err);
         }
       }
     }
 
     loadReferralStats();
+
+    // Set up real-time listener for when new players register with referred_by = telegramId
+    if (telegramId) {
+      const channel = supabase
+        .channel(`realtime:referrals:${telegramId}`)
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'players',
+            filter: `referred_by=eq.${telegramId}`,
+          },
+          () => {
+            console.log('[ProfileView] New referral detected via Realtime!');
+            setReferralCount((prev) => prev + 1);
+            triggerHaptic('heavy');
+          }
+        )
+        .subscribe();
+
+      return () => {
+        isMounted = false;
+        supabase.removeChannel(channel);
+      };
+    }
+
     return () => {
       isMounted = false;
     };
-  }, [telegramId]);
+  }, [telegramId, triggerHaptic]);
 
-  // Auto-sync TON Wallet address to Supabase on connect
+  // 2. Auto-sync TON Wallet address to Supabase on connect
   useEffect(() => {
     if (telegramId && userFriendlyAddress) {
       PlayerService.saveWalletAddress(telegramId, userFriendlyAddress);
@@ -76,8 +104,11 @@ export default function ProfileView() {
     return 'Starter Tycoon';
   };
 
+  // ✅ FIX: Use /app?startapp= for Direct Mini App links
   const botUsername = process.env.NEXT_PUBLIC_BOT_USERNAME || 'CapitalTycoonGameBot';
-  const referralLink = `https://t.me/${botUsername}?start=ref_${telegramId || 'guest'}`;
+  const referralLink = `https://t.me/${botUsername}/app?startapp=ref_${telegramId || 'guest'}`;
+
+  const totalReferralBonus = referralCount * 3000;
 
   const handleCopyReferral = () => {
     triggerHaptic('light');
@@ -88,11 +119,10 @@ export default function ProfileView() {
 
   const handleShareReferral = () => {
     triggerHaptic('medium');
-    const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(
-      referralLink
-    )}&text=${encodeURIComponent(
-      'Join me in Capital Tycoon! Build your luxury empire and earn rewards.'
-    )}`;
+    const shareText = encodeURIComponent(
+      'Join me in Capital Tycoon! Build your luxury empire and earn $3,000 DD bonuses.'
+    );
+    const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${shareText}`;
 
     if (typeof window !== 'undefined') {
       const tgWebApp = (window as any).Telegram?.WebApp;
@@ -183,7 +213,6 @@ export default function ProfileView() {
             </p>
           </div>
           
-          {/* Real TON Connect Web3 Button */}
           <TonConnectButton />
         </div>
       </div>
@@ -200,9 +229,13 @@ export default function ProfileView() {
               Earn +$3,000 Digital Dollars (DD) for every friend who joins.
             </p>
           </div>
-          <div className="text-right shrink-0 bg-blueblack-950 border border-slate-800 px-2.5 py-1.5 rounded-xl">
+          
+          <div className="text-right shrink-0 bg-blueblack-950 border border-slate-800 px-3 py-1.5 rounded-xl">
             <p className="text-[9px] font-bold text-slate-400 uppercase">Invited</p>
             <p className="text-xs font-black text-gold-500">{referralCount} Friends</p>
+            <p className="text-[9px] font-bold text-emerald-400 mt-0.5">
+              +${totalReferralBonus.toLocaleString()}
+            </p>
           </div>
         </div>
 
