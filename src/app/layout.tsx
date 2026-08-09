@@ -14,15 +14,17 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head>
-        {/* CRITICAL: Load Telegram WebApp SDK before Next.js initializes */}
         <Script
           src="https://telegram.org/js/telegram-web-app.js"
           strategy="beforeInteractive"
         />
       </head>
-      <body className="bg-slate-950 text-white min-h-screen">
+      <body
+        className="bg-slate-950 text-white min-h-screen"
+        suppressHydrationWarning
+      >
         <Providers>{children}</Providers>
       </body>
     </html>
