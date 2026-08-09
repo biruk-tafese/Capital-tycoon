@@ -4,7 +4,6 @@ import React from 'react';
 import { ShoppingBag, Zap, Wallet, Trophy, User } from 'lucide-react';
 import { useTelegramGame } from '../../hooks/useTelegramGame';
 
-// 1. Updated TabType union to explicitly include 'profile'
 export type TabType = 'store' | 'boosts' | 'withdraw' | 'leaderboard' | 'profile';
 
 interface BottomNavProps {
@@ -15,7 +14,6 @@ interface BottomNavProps {
 export default function BottomNav({ activeTab, setActiveTab }: BottomNavProps) {
   const { triggerHaptic } = useTelegramGame();
 
-  // 2. Added Profile navigation item
   const navItems = [
     { id: 'store' as TabType, label: 'Store', icon: ShoppingBag },
     { id: 'boosts' as TabType, label: 'Boosts', icon: Zap },
@@ -25,7 +23,7 @@ export default function BottomNav({ activeTab, setActiveTab }: BottomNavProps) {
   ];
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-40 bg-blueblack-900/95 backdrop-blur-md border-t border-slate-800 py-2 px-2">
+    <nav className="fixed bottom-0 left-0 right-0 z-40 bg-blueblack-900/95 backdrop-blur-md border-t border-slate-800 py-1.5 px-2">
       <div className="max-w-md mx-auto flex justify-around items-center">
         {navItems.map((item) => {
           const Icon = item.icon;
@@ -35,17 +33,34 @@ export default function BottomNav({ activeTab, setActiveTab }: BottomNavProps) {
             <button
               key={item.id}
               onClick={() => {
-                triggerHaptic('light');
+                triggerHaptic?.('light');
                 setActiveTab(item.id);
               }}
-              className={`flex flex-col items-center justify-center w-14 py-1 transition-all ${
-                isActive ? 'text-gold-500 scale-105' : 'text-slate-400 hover:text-slate-200'
+              className={`relative flex flex-col items-center justify-center w-14 py-1.5 rounded-xl transition-all duration-200 active:scale-95 ${
+                isActive
+                  ? 'text-gold-500 font-extrabold'
+                  : 'text-slate-400 hover:text-slate-200 font-medium'
               }`}
             >
-              <Icon className={`w-5 h-5 ${isActive ? 'stroke-[2.5px]' : 'stroke-2'}`} />
-              <span className={`text-[9px] font-bold mt-1 ${isActive ? 'text-gold-500' : ''}`}>
+              {/* Active Tab Ambient Glow Pill */}
+              {isActive && (
+                <span className="absolute inset-0 bg-gold-500/10 rounded-xl blur-sm -z-10" />
+              )}
+
+              <Icon
+                className={`w-5 h-5 transition-transform duration-200 ${
+                  isActive ? 'stroke-[2.5px] scale-110 text-gold-500' : 'stroke-2'
+                }`}
+              />
+              
+              <span className={`text-[9px] mt-1 tracking-tight ${isActive ? 'text-gold-500 font-black' : ''}`}>
                 {item.label}
               </span>
+
+              {/* Active Tab Top Indicator Line */}
+              {isActive && (
+                <span className="absolute -top-1.5 w-5 h-0.5 bg-gold-500 rounded-full shadow-[0_0_8px_#f59e0b]" />
+              )}
             </button>
           );
         })}
