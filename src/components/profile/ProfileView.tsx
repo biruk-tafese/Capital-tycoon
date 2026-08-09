@@ -76,7 +76,7 @@ export default function ProfileView() {
     return 'Starter Tycoon';
   };
 
-  const botUsername = process.env.NEXT_PUBLIC_BOT_USERNAME || 'CapitalTycoonBot';
+  const botUsername = process.env.NEXT_PUBLIC_BOT_USERNAME || 'CapitalTycoonGameBot';
   const referralLink = `https://t.me/${botUsername}?start=ref_${telegramId || 'guest'}`;
 
   const handleCopyReferral = () => {
