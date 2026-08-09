@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { PlayerService } from '../services/playerService';
 import { ShopItem } from '../types/store';
 
@@ -20,7 +20,6 @@ interface GameContextType {
 
 const GameContext = createContext<GameContextType | undefined>(undefined);
 
-// Helper function to extract user object from raw initData string if initDataUnsafe is empty
 function parseUserFromInitData(initData: string) {
   try {
     const searchParams = new URLSearchParams(initData);
@@ -29,7 +28,7 @@ function parseUserFromInitData(initData: string) {
       return JSON.parse(decodeURIComponent(userStr));
     }
   } catch (e) {
-    console.error('Failed to parse initData user string:', e);
+    console.error('Failed to parse initData user payload:', e);
   }
   return null;
 }
@@ -45,8 +44,14 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   const [lang, setLang] = useState<'en' | 'am'>('en');
   const [loading, setLoading] = useState<boolean>(true);
 
+  // Prevent multiple executions in React Strict Mode
+  const initializedRef = useRef(false);
+
   useEffect(() => {
     setMounted(true);
+
+    if (initializedRef.current) return;
+    initializedRef.current = true;
 
     const initApp = async () => {
       let rawUserId: string | null = null;
@@ -54,28 +59,32 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       let userUsername = '';
       let referrerId: string | undefined;
 
-      // Poll up to 15 times (3 seconds) for Telegram WebApp object hydration
       let retries = 0;
       while (retries < 15) {
         if (typeof window !== 'undefined' && window.Telegram?.WebApp) {
           const tg = window.Telegram.WebApp;
-          tg.ready();
-          tg.expand();
 
-          // 1. Primary check: Extract from initDataUnsafe
-          let tgUser = tg.initDataUnsafe?.user;
-
-          // 2. Fallback check: Parse raw initData string
-          if (!tgUser?.id && tg.initData) {
-            tgUser = parseUserFromInitData(tg.initData);
+          // Call ready() and expand() ONLY ONCE on initial hit
+          if (retries === 0) {
+            try {
+              tg.ready();
+              tg.expand();
+            } catch (e) {
+              // Ignore bridge errors during SSR/dev
+            }
           }
 
-          if (tgUser?.id) {
-            rawUserId = String(tgUser.id);
-            userFirstName = tgUser.first_name || '';
-            userUsername = tgUser.username || '';
+          let user = tg.initDataUnsafe?.user;
 
-            // Extract referral parameter
+          if (!user?.id && tg.initData) {
+            user = parseUserFromInitData(tg.initData);
+          }
+
+          if (user?.id) {
+            rawUserId = String(user.id);
+            userFirstName = user.first_name || '';
+            userUsername = user.username || '';
+
             let startParam = tg.initDataUnsafe?.start_param || '';
             if (!startParam) {
               const urlParams = new URLSearchParams(window.location.search);
@@ -89,16 +98,15 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
             if (startParam.startsWith('ref_')) {
               referrerId = startParam.replace('ref_', '').trim();
             }
-            break; // Hydration successful
+            break;
           }
         }
         await new Promise((res) => setTimeout(res, 200));
         retries++;
       }
 
-      // If no Telegram user detected after retries, stop loading gracefully
       if (!rawUserId) {
-        console.warn('[GameContext] No active Telegram user session found.');
+        console.warn('[GameContext] No active Telegram session detected.');
         setLoading(false);
         return;
       }
@@ -109,7 +117,6 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       setUsername(userUsername);
 
       try {
-        // Fetch or create user record in Supabase
         const player = await PlayerService.getOrCreatePlayer(
           {
             id: rawUserId,
@@ -119,20 +126,18 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
           referrerId
         );
 
-        setBalance(Number(player.balance || 0));
-        setStatus(Number(player.status_points || 0));
-        setLang((player.language as 'en' | 'am') || 'en');
+        setBalance(Number(player?.balance || 0));
+        setStatus(Number(player?.status_points || 0));
+        setLang((player?.language as 'en' | 'am') || 'en');
 
-        // Fetch owned items from inventory
         const ownedItems = await PlayerService.getPlayerInventory(rawUserId);
-        setInventory(ownedItems);
+        setInventory(ownedItems || []);
 
-        // Process referral bonus if valid
-        if (referrerId && rawUserId !== referrerId) {
+        if (referrerId && !player?.referred_by) {
           await PlayerService.processReferralBonus(rawUserId, referrerId);
         }
-      } catch (err) {
-        console.error('[GameContext] Error syncing player state:', err);
+      } catch (err: any) {
+        console.error('[GameContext] Error syncing player state:', err?.message || err);
       } finally {
         setLoading(false);
       }
@@ -158,20 +163,15 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       const result = await PlayerService.purchaseItem(telegramId, item);
 
       if (result.success) {
-        if (typeof result.new_balance === 'number') {
-          setBalance(result.new_balance);
-        } else {
-          setBalance((prev) => Math.max(0, prev - Number(item.price)));
-        }
-
+        setBalance((prev) => Math.max(0, prev - Number(item.price)));
         setStatus((prev) => prev + Number(item.statusBoost));
         setInventory((prev) => [...prev, item.id]);
         triggerHaptic('heavy');
       }
       return result;
     } catch (err: any) {
-      console.error('Purchase failed:', err);
-      return { success: false, error: err?.message || 'SERVER_ERROR' };
+      console.error('Purchase failed:', err?.message || err);
+      return { success: false, error: 'SERVER_ERROR' };
     }
   };
 

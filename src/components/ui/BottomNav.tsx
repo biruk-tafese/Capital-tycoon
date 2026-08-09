@@ -33,7 +33,9 @@ export default function BottomNav({ activeTab, setActiveTab }: BottomNavProps) {
             <button
               key={item.id}
               onClick={() => {
-                triggerHaptic?.('light');
+                if (triggerHaptic) {
+                  triggerHaptic('light');
+                }
                 setActiveTab(item.id);
               }}
               className={`relative flex flex-col items-center justify-center w-14 py-1.5 rounded-xl transition-all duration-200 active:scale-95 ${
@@ -52,7 +54,7 @@ export default function BottomNav({ activeTab, setActiveTab }: BottomNavProps) {
                   isActive ? 'stroke-[2.5px] scale-110 text-gold-500' : 'stroke-2'
                 }`}
               />
-              
+
               <span className={`text-[9px] mt-1 tracking-tight ${isActive ? 'text-gold-500 font-black' : ''}`}>
                 {item.label}
               </span>

@@ -21,10 +21,7 @@ export default function RootLayout({
           strategy="beforeInteractive"
         />
       </head>
-      <body
-        className="bg-slate-950 text-white min-h-screen"
-        suppressHydrationWarning
-      >
+      <body className="bg-slate-950 text-white min-h-screen" suppressHydrationWarning>
         <Providers>{children}</Providers>
       </body>
     </html>
