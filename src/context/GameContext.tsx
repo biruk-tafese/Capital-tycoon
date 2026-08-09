@@ -5,7 +5,7 @@ import { PlayerService } from '../services/playerService';
 import { ShopItem } from '../types/store';
 
 interface GameContextType {
-  telegramId: number | null;
+  telegramId: string | null;
   firstName: string;
   username: string;
   balance: number;
@@ -22,7 +22,7 @@ const GameContext = createContext<GameContextType | undefined>(undefined);
 
 export function GameProvider({ children }: { children: React.ReactNode }) {
   const [mounted, setMounted] = useState(false);
-  const [telegramId, setTelegramId] = useState<number | null>(null);
+  const [telegramId, setTelegramId] = useState<string | null>(null);
   const [firstName, setFirstName] = useState<string>('');
   const [username, setUsername] = useState<string>('');
   const [balance, setBalance] = useState<number>(0);
@@ -35,88 +35,85 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setMounted(true);
 
     const initApp = async () => {
-      let userId: number | null = null;
+      let rawUserId: string | null = null;
       let userFirstName = '';
       let userUsername = '';
-      let referrerId: number | undefined;
+      let referrerId: string | undefined;
 
-      if (typeof window !== 'undefined') {
-        const tg = window.Telegram?.WebApp;
-
-        if (tg) {
+      // Poll up to 10 times (2 seconds) to wait for Telegram WebApp object hydration
+      let retries = 0;
+      while (retries < 10) {
+        if (typeof window !== 'undefined' && window.Telegram?.WebApp) {
+          const tg = window.Telegram.WebApp;
           tg.ready();
           tg.expand();
 
-          // Safely extract user from initDataUnsafe
           const tgUser = tg.initDataUnsafe?.user;
-
           if (tgUser?.id) {
-            userId = Number(tgUser.id);
+            rawUserId = String(tgUser.id);
             userFirstName = tgUser.first_name || '';
             userUsername = tgUser.username || '';
-          }
 
-          // Extract start_param for referrals
-          let startParam = tg.initDataUnsafe?.start_param || '';
-
-          if (!startParam) {
-            const urlParams = new URLSearchParams(window.location.search);
-            startParam =
-              urlParams.get('tgWebAppStartParam') ||
-              urlParams.get('startapp') ||
-              urlParams.get('start_param') ||
-              '';
-          }
-
-          if (startParam.startsWith('ref_')) {
-            const parsedId = parseInt(startParam.replace('ref_', ''), 10);
-            if (!isNaN(parsedId)) {
-              referrerId = parsedId;
+            // Check for referral start_param
+            let startParam = tg.initDataUnsafe?.start_param || '';
+            if (!startParam) {
+              const urlParams = new URLSearchParams(window.location.search);
+              startParam =
+                urlParams.get('tgWebAppStartParam') ||
+                urlParams.get('startapp') ||
+                urlParams.get('start_param') ||
+                '';
             }
+
+            if (startParam.startsWith('ref_')) {
+              referrerId = startParam.replace('ref_', '').trim();
+            }
+            break; // Successfully captured Telegram user
           }
         }
+        await new Promise((res) => setTimeout(res, 200));
+        retries++;
+      }
 
-        // If not in Telegram environment or user unavailable, stop execution safely
-        if (!userId) {
-          console.warn('[GameContext] No active Telegram user detected in WebApp context.');
-          setLoading(false);
-          return;
+      // If no Telegram user detected after retries, stop loading gracefully
+      if (!rawUserId) {
+        console.warn('[GameContext] No active Telegram user session found.');
+        setLoading(false);
+        return;
+      }
+
+      console.log(`[GameContext] Session Loaded for Telegram ID: ${rawUserId}`);
+      setTelegramId(rawUserId);
+      setFirstName(userFirstName);
+      setUsername(userUsername);
+
+      try {
+        // Fetch or create user record in Supabase
+        const player = await PlayerService.getOrCreatePlayer(
+          {
+            id: rawUserId,
+            first_name: userFirstName,
+            username: userUsername,
+          },
+          referrerId
+        );
+
+        setBalance(Number(player.balance || 0));
+        setStatus(Number(player.status_points || 0));
+        setLang((player.language as 'en' | 'am') || 'en');
+
+        // Fetch owned items from inventory
+        const ownedItems = await PlayerService.getPlayerInventory(rawUserId);
+        setInventory(ownedItems);
+
+        // Process referral bonus if valid
+        if (referrerId && rawUserId !== referrerId) {
+          await PlayerService.processReferralBonus(rawUserId, referrerId);
         }
-
-        console.log(`[GameContext] Authenticated Telegram User: ID=${userId}, Name=${userFirstName}`);
-
-        setTelegramId(userId);
-        setFirstName(userFirstName);
-        setUsername(userUsername);
-
-        try {
-          // Fetch or Create user profile directly in Supabase
-          const player = await PlayerService.getOrCreatePlayer(
-            {
-              id: userId,
-              first_name: userFirstName,
-              username: userUsername,
-            },
-            referrerId
-          );
-
-          setBalance(Number(player.balance || 0));
-          setStatus(Number(player.status_points || 0));
-          setLang((player.language as 'en' | 'am') || 'en');
-
-          // Fetch user's inventory
-          const ownedItemIds = await PlayerService.getPlayerInventory(userId);
-          setInventory(ownedItemIds);
-
-          // Award referral bonus if referred by another user
-          if (referrerId && userId !== referrerId) {
-            await PlayerService.processReferralBonus(userId, referrerId);
-          }
-        } catch (err) {
-          console.error('[GameContext] Error syncing with Supabase:', err);
-        } finally {
-          setLoading(false);
-        }
+      } catch (err) {
+        console.error('[GameContext] Error syncing player state:', err);
+      } finally {
+        setLoading(false);
       }
     };
 

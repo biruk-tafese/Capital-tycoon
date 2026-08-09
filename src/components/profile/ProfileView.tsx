@@ -1,8 +1,10 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTelegramGame } from '../../context/GameContext';
 import { translations } from '../../lib/i18n';
+import { PlayerService } from '../../services/playerService';
+import { TonConnectButton, useTonAddress } from '@tonconnect/ui-react';
 import {
   Wallet,
   Users,
@@ -19,6 +21,8 @@ import {
 export default function ProfileView() {
   const {
     telegramId,
+    firstName,
+    username: ctxUsername,
     balance,
     status,
     inventory,
@@ -28,21 +32,43 @@ export default function ProfileView() {
 
   const t = translations[lang];
   const [copied, setCopied] = useState(false);
+  const [referralCount, setReferralCount] = useState<number>(0);
+  const userFriendlyAddress = useTonAddress();
 
-  // Authenticated Telegram WebApp User
-  const tgUser =
-    typeof window !== 'undefined' && window.Telegram?.WebApp?.initDataUnsafe?.user
-      ? window.Telegram.WebApp.initDataUnsafe.user
-      : null;
+  // Load referral stats dynamically from Supabase
+  useEffect(() => {
+    let isMounted = true;
 
-  const displayName = tgUser
-    ? `${tgUser.first_name || ''} ${tgUser.last_name || ''}`.trim()
-    : 'Capital Tycoon Player';
+    async function loadReferralStats() {
+      if (telegramId) {
+        try {
+          const count = await PlayerService.getReferralCount(telegramId);
+          if (isMounted) setReferralCount(count);
+        } catch (err) {
+          console.error('Error fetching referral count:', err);
+        }
+      }
+    }
 
-  const username = tgUser?.username ? `@${tgUser.username}` : 'Executive Account';
-  const avatarInitial = (tgUser?.first_name?.[0] || 'C').toUpperCase();
+    loadReferralStats();
+    return () => {
+      isMounted = false;
+    };
+  }, [telegramId]);
 
-  // Dynamic Executive Rank based on status points saved in Supabase
+  // Auto-sync TON Wallet address to Supabase on connect
+  useEffect(() => {
+    if (telegramId && userFriendlyAddress) {
+      PlayerService.saveWalletAddress(telegramId, userFriendlyAddress);
+    }
+  }, [telegramId, userFriendlyAddress]);
+
+  // Profile metadata
+  const displayName = firstName || 'Capital Tycoon';
+  const username = ctxUsername ? `@${ctxUsername}` : 'Executive Account';
+  const avatarInitial = (displayName[0] || 'C').toUpperCase();
+
+  // Executive Rank Calculation
   const getExecutiveRank = (points: number) => {
     if (points >= 5000) return 'Mogul Billionaire';
     if (points >= 2000) return 'Senior Investor';
@@ -116,7 +142,7 @@ export default function ProfileView() {
         </div>
       </div>
 
-      {/* 2. Live Parameters Overview (Synced via GameContext) */}
+      {/* 2. Live Parameters Overview */}
       <div className="grid grid-cols-3 gap-2.5">
         {/* Balance Parameter */}
         <div className="p-3 bg-blueblack-900 rounded-2xl border border-slate-800 text-center space-y-1">
@@ -140,34 +166,44 @@ export default function ProfileView() {
         </div>
       </div>
 
-      {/* 3. Payout Method Settings */}
-      <div className="p-4 bg-blueblack-900 rounded-2xl border border-slate-800 space-y-2.5">
+      {/* 3. Payout Method Settings & TON Wallet Connect */}
+      <div className="p-4 bg-blueblack-900 rounded-2xl border border-slate-800 space-y-3">
         <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
           <Wallet className="w-4 h-4 text-gold-500" />
-          Payout Method & Wallet
+          Payout Method & TON Wallet
         </h3>
 
-        <div className="p-3 bg-blueblack-950 rounded-xl border border-slate-800/80 flex items-center justify-between">
+        <div className="p-3 bg-blueblack-950 rounded-xl border border-slate-800/80 flex items-center justify-between gap-2">
           <div>
-            <p className="font-bold text-xs text-white">TON Connect Wallet</p>
-            <p className="text-[10px] text-slate-400">Web3 Network Payout Active</p>
+            <p className="font-bold text-xs text-white">TON Connect</p>
+            <p className="text-[10px] text-slate-400 truncate max-w-[150px]">
+              {userFriendlyAddress
+                ? `${userFriendlyAddress.slice(0, 4)}...${userFriendlyAddress.slice(-4)}`
+                : 'Connect wallet for payouts'}
+            </p>
           </div>
-          <span className="px-2 py-1 rounded-md bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-bold text-[10px] uppercase">
-            Connected
-          </span>
+          
+          {/* Real TON Connect Web3 Button */}
+          <TonConnectButton />
         </div>
       </div>
 
-      {/* 4. Referral Section */}
+      {/* 4. Dynamic Referral Section */}
       <div className="p-4 bg-blueblack-900 rounded-2xl border border-slate-800 space-y-3">
-        <div>
-          <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-            <Users className="w-4 h-4 text-gold-500" />
-            Invite Friends & Earn DD
-          </h3>
-          <p className="text-[11px] text-slate-400 font-medium mt-1">
-            Earn +$1,000 Digital Dollars (DD) for every friend who joins via your invite link.
-          </p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+              <Users className="w-4 h-4 text-gold-500" />
+              Invite Friends & Earn DD
+            </h3>
+            <p className="text-[11px] text-slate-400 font-medium mt-1">
+              Earn +$3,000 Digital Dollars (DD) for every friend who joins.
+            </p>
+          </div>
+          <div className="text-right shrink-0 bg-blueblack-950 border border-slate-800 px-2.5 py-1.5 rounded-xl">
+            <p className="text-[9px] font-bold text-slate-400 uppercase">Invited</p>
+            <p className="text-xs font-black text-gold-500">{referralCount} Friends</p>
+          </div>
         </div>
 
         <div className="flex gap-2">

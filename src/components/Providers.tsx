@@ -2,18 +2,16 @@
 
 import React from 'react';
 import { TonConnectUIProvider } from '@tonconnect/ui-react';
+import { GameProvider } from '../context/GameContext';
 
-export function Providers({ children }: { children: React.ReactNode }) {
-  // Dynamically derive the base URL from environment variable or window location
-  const baseUrl =
-    process.env.NEXT_PUBLIC_APP_URL ||
-    (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000');
+const MANIFEST_URL = process.env.NEXT_PUBLIC_MANIFEST_URL || 'https://capital-tycoon.vercel.app/tonconnect-manifest.json';
 
-  const manifestUrl = `${baseUrl}/tonconnect-manifest.json`;
-
+export default function Providers({ children }: { children: React.ReactNode }) {
   return (
-    <TonConnectUIProvider manifestUrl={manifestUrl}>
-      {children}
+    <TonConnectUIProvider manifestUrl={MANIFEST_URL}>
+      <GameProvider>
+        {children}
+      </GameProvider>
     </TonConnectUIProvider>
   );
 }

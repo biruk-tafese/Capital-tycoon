@@ -3,7 +3,7 @@ import { ShopItem } from '../types/store';
 import { PlayerRow } from '../types/database';
 
 export interface TelegramUserData {
-  id: number;
+  id: string; // Keep as string to avoid 64-bit integer truncation
   first_name?: string;
   username?: string;
 }
@@ -21,15 +21,24 @@ export interface ReferralResult {
   error?: string;
 }
 
+export interface LeaderboardEntry {
+  rank: number;
+  telegram_id: string;
+  first_name: string;
+  username: string;
+  balance: number;
+  status_points: number;
+}
+
 export const PlayerService = {
   /**
-   * Fetches or creates the active Telegram user row in Supabase.
-   * Directly updates profile names if changed in Telegram.
+   * Safely fetches or registers the active Telegram account in Supabase.
+   * Dynamically updates first_name and username if changed inside Telegram.
    */
-  async getOrCreatePlayer(tgUser: TelegramUserData, referrerId?: number): Promise<PlayerRow> {
+  async getOrCreatePlayer(tgUser: TelegramUserData, referrerId?: string): Promise<PlayerRow> {
     const rawTgId = String(tgUser.id);
 
-    // 1. Query for existing player
+    // 1. Fetch player by telegram_id
     const { data: existingPlayer } = await (supabase
       .from('players') as any)
       .select('*')
@@ -37,7 +46,7 @@ export const PlayerService = {
       .maybeSingle();
 
     if (existingPlayer) {
-      // Dynamically update profile names if modified in Telegram
+      // Sync names if user changed them in Telegram
       const updatedFirstName = tgUser.first_name || existingPlayer.first_name;
       const updatedUsername = tgUser.username || existingPlayer.username;
 
@@ -62,22 +71,25 @@ export const PlayerService = {
       return existingPlayer as PlayerRow;
     }
 
-    // 2. Insert new user with $30,000 starting balance
-    const { data: newPlayer, error: insertError } = await (supabase
+    // 2. Perform safe UPSERT for new accounts
+    const { data: newPlayer, error: upsertError } = await (supabase
       .from('players') as any)
-      .insert({
-        telegram_id: rawTgId,
-        first_name: tgUser.first_name || null,
-        username: tgUser.username || null,
-        balance: 30000,
-        status_points: 0,
-        referred_by: referrerId ? String(referrerId) : null,
-      })
+      .upsert(
+        {
+          telegram_id: rawTgId,
+          first_name: tgUser.first_name || null,
+          username: tgUser.username || null,
+          balance: 30000,
+          status_points: 0,
+          referred_by: referrerId || null,
+        },
+        { onConflict: 'telegram_id', ignoreDuplicates: false }
+      )
       .select('*')
       .single();
 
-    if (insertError) {
-      console.warn('Insert conflict or error, fetching fallback row:', insertError);
+    if (upsertError) {
+      console.warn('[PlayerService] Upsert fallback lookup triggered:', upsertError);
       const { data: fallbackPlayer } = await (supabase
         .from('players') as any)
         .select('*')
@@ -85,23 +97,23 @@ export const PlayerService = {
         .single();
 
       if (fallbackPlayer) return fallbackPlayer as PlayerRow;
-      throw insertError;
+      throw upsertError;
     }
 
     return newPlayer as PlayerRow;
   },
 
   /**
-   * Fetches item IDs owned by the player from player_inventory
+   * Fetches asset IDs owned by the Telegram user
    */
-  async getPlayerInventory(telegramId: number): Promise<string[]> {
+  async getPlayerInventory(telegramId: string): Promise<string[]> {
     const { data, error } = await (supabase
       .from('player_inventory') as any)
       .select('item_id')
       .eq('telegram_id', String(telegramId));
 
     if (error || !data) {
-      console.error('Error fetching player inventory:', error);
+      console.error('[PlayerService] Error fetching inventory:', error);
       return [];
     }
 
@@ -109,9 +121,9 @@ export const PlayerService = {
   },
 
   /**
-   * Executes atomic item purchase via Postgres buy_shop_item RPC function
+   * Executes atomic item purchase in PostgreSQL
    */
-  async purchaseItem(telegramId: number, item: ShopItem): Promise<PurchaseResult> {
+  async purchaseItem(telegramId: string, item: ShopItem): Promise<PurchaseResult> {
     try {
       const { data, error } = await (supabase.rpc as any)('buy_shop_item', {
         p_telegram_id: String(telegramId),
@@ -121,13 +133,12 @@ export const PlayerService = {
       });
 
       if (error) {
-        console.error('RPC purchase error:', JSON.stringify(error, null, 2));
+        console.error('[PlayerService] Purchase RPC error:', error);
         return { success: false, error: error.message || 'RPC_FAILED' };
       }
 
       const res = data as any;
       if (!res?.success) {
-        console.warn('RPC purchase rejected by database:', res?.error);
         return { success: false, error: res?.error || 'PURCHASE_REJECTED' };
       }
 
@@ -137,17 +148,17 @@ export const PlayerService = {
         status_boost: Number(res.status_boost),
       };
     } catch (err: any) {
-      console.error('Unhandled purchase exception:', err);
+      console.error('[PlayerService] Unhandled purchase error:', err);
       return { success: false, error: err?.message || 'SERVER_ERROR' };
     }
   },
 
   /**
-   * Processes referral reward ($3,000 DD) when opened via a referral link
+   * Processes referral bonus ($3,000 DD)
    */
   async processReferralBonus(
-    newTelegramId: number,
-    referrerId: number
+    newTelegramId: string,
+    referrerId: string
   ): Promise<ReferralResult> {
     try {
       const { data, error } = await (supabase.rpc as any)('process_referral', {
@@ -157,14 +168,102 @@ export const PlayerService = {
       });
 
       if (error) {
-        console.error('Error processing referral:', JSON.stringify(error, null, 2));
+        console.error('[PlayerService] Referral RPC error:', error);
         return { success: false, error: error.message || 'REFERRAL_FAILED' };
       }
 
       return (data as ReferralResult) || { success: false, error: 'UNKNOWN_ERROR' };
     } catch (err: any) {
-      console.error('Unhandled referral exception:', err);
+      console.error('[PlayerService] Unhandled referral error:', err);
       return { success: false, error: err?.message || 'SERVER_ERROR' };
+    }
+  },
+
+  /**
+   * Fetches the top N players sorted by Status Points
+   */
+  async getTopLeaderboard(limit: number = 50): Promise<LeaderboardEntry[]> {
+    try {
+      const { data, error } = await (supabase.rpc as any)('get_top_leaderboard', {
+        p_limit: limit,
+      });
+
+      if (error) {
+        console.error('[Leaderboard] Error fetching top players:', error);
+        return [];
+      }
+
+      return (data || []) as LeaderboardEntry[];
+    } catch (err) {
+      console.error('[Leaderboard] Unhandled exception:', err);
+      return [];
+    }
+  },
+
+  /**
+   * Fetches the specific logged-in player's rank details
+   */
+  async getPlayerRank(telegramId: string): Promise<LeaderboardEntry | null> {
+    try {
+      const { data, error } = await (supabase.rpc as any)('get_player_rank', {
+        p_telegram_id: String(telegramId),
+      });
+
+      if (error || data?.error) {
+        console.error('[Leaderboard] Error fetching player rank:', error || data?.error);
+        return null;
+      }
+
+      return data as LeaderboardEntry;
+    } catch (err) {
+      console.error('[Leaderboard] Unhandled exception:', err);
+      return null;
+    }
+  },
+
+  /**
+   * Saves or updates the player's connected TON wallet address
+   */
+  async saveWalletAddress(telegramId: string, walletAddress: string): Promise<boolean> {
+    try {
+      const { error } = await (supabase
+        .from('players') as any)
+        .update({
+          ton_wallet_address: walletAddress,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('telegram_id', String(telegramId));
+
+      if (error) {
+        console.error('[PlayerService] Failed to save TON wallet address:', error);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      console.error('[PlayerService] Unhandled wallet save exception:', err);
+      return false;
+    }
+  },
+  
+  /**
+   * Fetches the total number of users referred by a player from Supabase
+   */
+  async getReferralCount(telegramId: string): Promise<number> {
+    try {
+      const { count, error } = await (supabase
+        .from('players') as any)
+        .select('*', { count: 'exact', head: true })
+        .eq('referred_by', String(telegramId));
+
+      if (error) {
+        console.error('[PlayerService] Error fetching referral count:', error);
+        return 0;
+      }
+
+      return count || 0;
+    } catch (err) {
+      console.error('[PlayerService] Unhandled referral count exception:', err);
+      return 0;
     }
   },
 };

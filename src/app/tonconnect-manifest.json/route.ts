@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 
 export async function GET() {
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL;
 
   const manifest = {
     url: baseUrl,
@@ -10,6 +10,6 @@ export async function GET() {
     termsOfServiceUrl: `${baseUrl}/terms`,
     privacyPolicyUrl: `${baseUrl}/privacy`,
   };
-
   return NextResponse.json(manifest);
 }
+
