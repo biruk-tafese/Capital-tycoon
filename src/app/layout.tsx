@@ -1,11 +1,11 @@
 import type { Metadata } from 'next';
-import '../lib/suppressThreeWarnings'; //
-import { GameProvider } from '../context/GameContext';
+import Script from 'next/script';
+import Providers from '../components/Providers';
 import './globals.css';
 
 export const metadata: Metadata = {
   title: 'Capital Tycoon',
-  description: 'Telegram Mini App Game',
+  description: 'Build your business empire',
 };
 
 export default function RootLayout({
@@ -15,11 +15,15 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body
-        className="bg-blueblack-950 text-white antialiased"
-        suppressHydrationWarning
-      >
-        <GameProvider>{children}</GameProvider>
+      <head>
+        {/* CRITICAL: Load Telegram WebApp SDK before Next.js initializes */}
+        <Script
+          src="https://telegram.org/js/telegram-web-app.js"
+          strategy="beforeInteractive"
+        />
+      </head>
+      <body className="bg-slate-950 text-white min-h-screen">
+        <Providers>{children}</Providers>
       </body>
     </html>
   );

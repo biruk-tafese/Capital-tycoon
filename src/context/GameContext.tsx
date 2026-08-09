@@ -20,6 +20,20 @@ interface GameContextType {
 
 const GameContext = createContext<GameContextType | undefined>(undefined);
 
+// Helper function to extract user object from raw initData string if initDataUnsafe is empty
+function parseUserFromInitData(initData: string) {
+  try {
+    const searchParams = new URLSearchParams(initData);
+    const userStr = searchParams.get('user');
+    if (userStr) {
+      return JSON.parse(decodeURIComponent(userStr));
+    }
+  } catch (e) {
+    console.error('Failed to parse initData user string:', e);
+  }
+  return null;
+}
+
 export function GameProvider({ children }: { children: React.ReactNode }) {
   const [mounted, setMounted] = useState(false);
   const [telegramId, setTelegramId] = useState<string | null>(null);
@@ -40,21 +54,28 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       let userUsername = '';
       let referrerId: string | undefined;
 
-      // Poll up to 10 times (2 seconds) to wait for Telegram WebApp object hydration
+      // Poll up to 15 times (3 seconds) for Telegram WebApp object hydration
       let retries = 0;
-      while (retries < 10) {
+      while (retries < 15) {
         if (typeof window !== 'undefined' && window.Telegram?.WebApp) {
           const tg = window.Telegram.WebApp;
           tg.ready();
           tg.expand();
 
-          const tgUser = tg.initDataUnsafe?.user;
+          // 1. Primary check: Extract from initDataUnsafe
+          let tgUser = tg.initDataUnsafe?.user;
+
+          // 2. Fallback check: Parse raw initData string
+          if (!tgUser?.id && tg.initData) {
+            tgUser = parseUserFromInitData(tg.initData);
+          }
+
           if (tgUser?.id) {
             rawUserId = String(tgUser.id);
             userFirstName = tgUser.first_name || '';
             userUsername = tgUser.username || '';
 
-            // Check for referral start_param
+            // Extract referral parameter
             let startParam = tg.initDataUnsafe?.start_param || '';
             if (!startParam) {
               const urlParams = new URLSearchParams(window.location.search);
@@ -68,7 +89,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
             if (startParam.startsWith('ref_')) {
               referrerId = startParam.replace('ref_', '').trim();
             }
-            break; // Successfully captured Telegram user
+            break; // Hydration successful
           }
         }
         await new Promise((res) => setTimeout(res, 200));
